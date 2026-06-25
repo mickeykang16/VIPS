@@ -1,0 +1,23 @@
+hydra:
+  run:
+    dir: ${output_dir}
+  output_subdir: ${output_dir}/code/hydra
+  searchpath:
+    - pkg://navsim.planning.script.config.common
+  job:
+    chdir: False
+
+defaults:
+  - default_common
+  - dataset_paths_v2xreal
+  - override /train_test_split: v2xreal_test_5s
+  - _self_
+
+force_feature_computation: True
+output_dir: ${metric_cache_path}/metadata
+
+proposal_sampling:
+  _target_: nuplan.planning.simulation.trajectory.trajectory_sampling.TrajectorySampling
+  _convert_: 'all'
+  num_poses: 10  # 5sec x 2Hz
+  interval_length: 0.5

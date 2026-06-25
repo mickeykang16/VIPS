@@ -1,0 +1,4 @@
+defaults:
+  - scene_filter: v2xreal_scenes_short_5s
+
+data_split: test

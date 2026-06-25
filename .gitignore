@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# Local environments and editors
+.env
+.env.*
+.vscode/
+.idea/
+
+# Data, checkpoints, and generated outputs
+dataset/
+data/
+!scripts/data/
+!scripts/data/*.sh
+maps/
+exp*/
+outputs/
+models/
+checkpoints/
+work_dirs/
+*.pkl
+*.pt
+*.pth
+*.ckpt
+*.onnx
+*.npy
+*.npz
+*.log
+
+# Machine-specific eval paths (copy from configs/eval/paths.example.py)
+configs/eval/paths.py
+
+# Not distributed in this repo (see Results footnote / CoS-V2X section)
+navsim/agents/univ2x_agent.py
+
+# Internal dev notes / runbooks (machine-specific; not for release)
+docs/

@@ -1,0 +1,8 @@
+name: vips
+channels:
+  - conda-forge
+dependencies:
+  - python=3.9
+  - pip=23.3.1
+  - pip:
+      - -r requirements.txt
