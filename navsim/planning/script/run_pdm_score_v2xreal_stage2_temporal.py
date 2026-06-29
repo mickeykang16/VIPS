@@ -518,6 +518,61 @@ def _build_v2xreal_agent_input(
     return result
 
 
+def _front_cam_for_viz(mc, token, info_dict, sensor_blob_path, sensor_cfg,
+                       offset_name=None, future_info=None):
+    """Rebuild the front camera (image + calib) + lidar2ego for the projection panel.
+    Returns (camera, lidar2ego_R, lidar2ego_t) or (None, None, None)."""
+    if sensor_blob_path is None:
+        return None, None, None
+    try:
+        ai = _build_v2xreal_agent_input(
+            mc, token, info_dict, sensor_blob_path, sensor_cfg,
+            offset_name=offset_name, future_info=future_info,
+        )
+        cam = ai.cameras[-1].cam_f0
+        if cam is None or cam.image is None:
+            return None, None, None
+        l2e_R, l2e_t = None, None
+        if getattr(ai, "lidar2ego_rotation", None) is not None:
+            from pyquaternion import Quaternion as _Q
+            l2e_R = _Q(np.asarray(ai.lidar2ego_rotation, dtype=np.float64)).rotation_matrix
+            l2e_t = np.asarray(ai.lidar2ego_translation, dtype=np.float64).reshape(3)
+        return cam, l2e_R, l2e_t
+    except Exception:
+        return None, None, None
+
+
+def _stage2_cam_data_for_viz(token, mc_s1, stage2_data_viz, stage2_caches,
+                             token_to_future_pkl_token, info_dict, sensor_blob_path,
+                             sensor_cfg, k=3):
+    """Build up to k stage2 novel-view cameras (highest weight) + their trajectories
+    for the viz camera grid. Returns a list of dicts for visualize_prediction_two_stage."""
+    if sensor_blob_path is None or not stage2_data_viz:
+        return []
+    log = getattr(mc_s1, "log_name", "")
+    pkl_tok = token[len(log) + 1:] if (log and token.startswith(log + "_")) else token
+    fut_tok = token_to_future_pkl_token.get(pkl_tok)
+    fut_info = info_dict.get(fut_tok) if fut_tok else None
+    top = sorted(stage2_data_viz.items(), key=lambda kv: kv[1].get("weight", 0.0), reverse=True)[:k]
+    out = []
+    for off, d in top:
+        caches = stage2_caches.get(off, {})
+        if token not in caches:
+            continue
+        try:
+            mc_s2 = _load_metric_cache(caches[token])
+            cam, R, t = _front_cam_for_viz(
+                mc_s2, token, info_dict, sensor_blob_path, sensor_cfg,
+                offset_name=off, future_info=fut_info)
+            if cam is None:
+                continue
+            out.append({"offset": off, "camera": cam, "lidar2ego_R": R, "lidar2ego_t": t,
+                        "trajectory": d.get("trajectory"), "weight": d.get("weight")})
+        except Exception:
+            continue
+    return out
+
+
 def _is_offset_dir_name(name: str) -> bool:
     return name.startswith("x") and "_y" in name
 
@@ -939,6 +994,8 @@ def main():
                         if mc_s1 is None:
                             mc_s1 = _load_metric_cache(stage1_caches[token])
                         output_path = viz_output_dir / f"{token}.png"
+                        _fc, _fcR, _fct = _front_cam_for_viz(
+                            mc_s1, token, info_dict, sensor_blob_path, sensor_cfg)
                         visualize_prediction_two_stage(
                             metric_cache=mc_s1,
                             pred_trajectory=agent_trajectories.get(token),
@@ -948,6 +1005,7 @@ def main():
                             output_path=output_path,
                             map_root=map_root,
                             simulated_states=s1_simulated,
+                            front_camera=_fc, lidar2ego_R=_fcR, lidar2ego_t=_fct,
                         )
                         viz_count += 1
                     except Exception:
@@ -1068,6 +1126,11 @@ def main():
                                     "metrics": s2r,
                                 }
                             output_path = viz_output_dir / f"{token}.png"
+                            _fc, _fcR, _fct = _front_cam_for_viz(
+                                mc_s1, token, info_dict, sensor_blob_path, sensor_cfg)
+                            _s2cam = _stage2_cam_data_for_viz(
+                                token, mc_s1, stage2_data_viz, stage2_caches,
+                                token_to_future_pkl_token, info_dict, sensor_blob_path, sensor_cfg)
                             visualize_prediction_two_stage(
                                 metric_cache=mc_s1,
                                 pred_trajectory=agent_trajectories.get(token),
@@ -1077,6 +1140,8 @@ def main():
                                 output_path=output_path,
                                 map_root=map_root,
                                 simulated_states=s1_simulated,
+                                front_camera=_fc, lidar2ego_R=_fcR, lidar2ego_t=_fct,
+                                stage2_cam_data=_s2cam,
                             )
                             viz_count += 1
                             if viz_count % 50 == 0:

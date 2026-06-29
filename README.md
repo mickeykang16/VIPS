@@ -6,7 +6,8 @@ Hoonhee Cho, Jae-Young Kang, Giwon Lee, Hyemin Yang, Heejun Park, Kuk-jin Yoon<b
 KAIST, Visual Intelligence Lab<br>
 Contact: {gnsgnsgml, mickeykang, dlrldnjs, hyemin0806, parkhee.ticket, kjyoon}@kaist.ac.kr
 
-_Paper / project page / arXiv: coming soon._
+- **Project page:** https://vips2026.github.io/
+- **Paper / arXiv:** _coming soon_
 
 VIPS evaluates **vehicle-infrastructure cooperative (V2X) planning** on the
 [V2X-Real](https://mobility-lab.seas.ucla.edu/v2x-real/) dataset with a
@@ -233,9 +234,29 @@ applied by default, so the printed score is the reported number; set
 
 ## Visualization
 
-Set `VISUALIZE=1` in the eval (config or command line) to save per-token BEV
-renders — stage-1/stage-2 proposals, EPDMS sub-scores, and the drivable area —
-under `<output_dir>/viz/` (via `navsim/visualization/stage2_eval_viz.py`).
+Run in the `vips` env; data paths come from `configs/eval/paths.py`.
+
+**Evaluation result** — BEV + camera grid + EPDMS scores, saved when you run the eval with `VISUALIZE=1`.
+
+The standalone renderers all take a scene `--token` (e.g. the one below):
+
+```bash
+TOKEN=2023-03-17-16-12-12_3_0_folder_1_-2_2023-03-17-16-12-12_3_0_folder_1_-2_000009_folder_1_-2
+
+# metric cache (BEV): map, GT boxes, stage-1 ego, all stage-2 offset poses
+python scripts/visualization/viz_metric_cache.py  --token $TOKEN --output-path bev.png
+# GT 3D boxes + map lanes projected onto every camera
+python scripts/visualization/viz_rgb_projection.py --token $TOKEN --output-path rgb.png
+# original vs. synthesized novel-view, per camera
+python scripts/visualization/viz_synthetic_rgb.py  --token $TOKEN --output-path novel.png
+```
+
+**Full map**:
+
+```bash
+python scripts/map_visualization/visualize_full_map.py --output-path map.png
+```
+
 
 ## License
 

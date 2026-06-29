@@ -48,6 +48,7 @@ from run_pdm_score_v2xreal_stage2_temporal import (  # noqa: E402
     _load_metric_cache, _load_proposal_sampling_from_cache, _make_ego_status,
     _agent_input_from_metric_cache, _compute_infra_sensor_to_ego_lidar,
     _build_v2xreal_agent_input, _is_offset_dir_name, _path_has_offset_dir,
+    _front_cam_for_viz, _stage2_cam_data_for_viz,
     _discover_metric_caches, _build_temporal_schedule, _discover_offset_dirs, _score_single,
     # Framework classes (re-exported from temporal.py's module-level imports)
     VehicleParameters, PDMScorer, PDMScorerConfig, PDMSimulator,
@@ -319,6 +320,8 @@ def _temporal_worker_fn(
                         try:
                             if mc_s1 is None:
                                 mc_s1 = _load_metric_cache(stage1_caches[token])
+                            _fc, _fcR, _fct = _front_cam_for_viz(
+                                mc_s1, token, info_dict, sensor_blob_path, sensor_cfg)
                             visualize_prediction_two_stage(
                                 metric_cache=mc_s1,
                                 pred_trajectory=agent_trajectories.get(token),
@@ -328,6 +331,7 @@ def _temporal_worker_fn(
                                 output_path=viz_output_dir / f"{token}.png",
                                 map_root=map_root,
                                 simulated_states=s1_simulated,
+                                front_camera=_fc, lidar2ego_R=_fcR, lidar2ego_t=_fct,
                             )
                             viz_count += 1
                         except Exception:
@@ -491,6 +495,11 @@ def _temporal_worker_fn(
                                         "weight": float(weights[j]),
                                         "metrics": s2r,
                                     }
+                                _fc, _fcR, _fct = _front_cam_for_viz(
+                                    mc_s1_viz, token, info_dict, sensor_blob_path, sensor_cfg)
+                                _s2cam = _stage2_cam_data_for_viz(
+                                    token, mc_s1_viz, stage2_data_viz, stage2_caches,
+                                    token_to_future_pkl_token, info_dict, sensor_blob_path, sensor_cfg)
                                 visualize_prediction_two_stage(
                                     metric_cache=mc_s1_viz,
                                     pred_trajectory=agent_trajectories.get(token),
@@ -501,6 +510,8 @@ def _temporal_worker_fn(
                                     map_root=map_root,
                                     simulated_states=s1_simulated,
                                     simulated_tracks=_sim_tracks,
+                                    front_camera=_fc, lidar2ego_R=_fcR, lidar2ego_t=_fct,
+                                    stage2_cam_data=_s2cam,
                                 )
                                 viz_count += 1
                                 if viz_count % 50 == 0:
@@ -664,7 +675,10 @@ def _save_and_log_results(
             logger.info(f"  {col:35s} {s1_m:8.4f} {s2_m:8.4f}")
 
         if visualize:
-            logger.info(f"\nVisualization: {viz_count} images saved to {viz_output_dir}")
+            # Workers write viz directly to disk; the main process doesn't tally their
+            # per-worker counts, so report the actual number of files on disk instead.
+            _n_viz = len(list(Path(viz_output_dir).glob("*.png"))) if viz_output_dir else 0
+            logger.info(f"\nVisualization: {_n_viz} images saved to {viz_output_dir}")
 
     logger.info("")
     logger.info(f"Results saved to: {output_dir}")

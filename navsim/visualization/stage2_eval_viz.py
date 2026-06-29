@@ -124,6 +124,52 @@ def _global_to_ego(x_global, y_global, ego_pose: StateSE2):
     return dx * cos_h - dy * sin_h, dx * sin_h + dy * cos_h
 
 
+def _project_ego_xy_to_cam(xy_ego, cam, l2e_R, l2e_t, ground_z=-1.8):
+    """Project ego-frame ground points (x-fwd, y-left) onto a camera image.
+
+    lidar->cam = inv(sensor2lidar); pixel = K @ P_cam. Points are placed on the
+    ground plane (z = ground_z in the lidar/ego frame; z=0 would be at sensor
+    height = the horizon). Returns (u, v, z_cam)."""
+    K = np.asarray(cam.intrinsics, dtype=np.float64)
+    Rsl = np.asarray(cam.sensor2lidar_rotation, dtype=np.float64)
+    tsl = np.asarray(cam.sensor2lidar_translation, dtype=np.float64).reshape(3)
+    Rlc = np.linalg.inv(Rsl)
+    tlc = -Rlc @ tsl
+    us, vs, zs = [], [], []
+    for x, y in np.asarray(xy_ego, dtype=np.float64):
+        P = np.array([x, y, ground_z], dtype=np.float64)
+        if l2e_R is not None:
+            P = l2e_R.T @ (P - l2e_t)          # ego -> lidar (identity on V2X-Real)
+        Pc = Rlc @ P + tlc
+        px = K @ Pc
+        if abs(px[2]) < 1e-6:
+            us.append(np.nan); vs.append(np.nan); zs.append(float(Pc[2])); continue
+        us.append(px[0] / px[2]); vs.append(px[1] / px[2]); zs.append(float(Pc[2]))
+    return np.array(us), np.array(vs), np.array(zs)
+
+
+def _draw_cam_panel(ax_cam, cam, l2e_R, l2e_t, trajectories, ground_z, title, fs=9):
+    """Camera image with projected ground-frame trajectories overlaid.
+
+    trajectories: list of (xy_array[N,2] ego-frame, color, label)."""
+    img = np.asarray(cam.image)
+    H, W = img.shape[0], img.shape[1]
+    ax_cam.imshow(img)
+    ax_cam.set_title(title, fontsize=fs)
+    ax_cam.axis("off")
+
+    for xy, color, label in trajectories:
+        if xy is None or len(xy) == 0:
+            continue
+        u, v, z = _project_ego_xy_to_cam(xy, cam, l2e_R, l2e_t, ground_z)
+        m = (z > 0.1) & np.isfinite(u) & np.isfinite(v)
+        ax_cam.plot(u[m], v[m], "-", color=color, lw=2.0, alpha=0.9, zorder=5)
+        ax_cam.scatter(u[m], v[m], s=20, c=color, edgecolors="black", linewidths=0.4,
+                       label=label, zorder=6)
+    ax_cam.set_xlim(0, W); ax_cam.set_ylim(H, 0)
+    ax_cam.legend(loc="upper right", fontsize=max(6, fs - 2))
+
+
 def visualize_prediction_two_stage(
     metric_cache: MetricCache,
     pred_trajectory: Trajectory,
@@ -134,14 +180,71 @@ def visualize_prediction_two_stage(
     map_root: Optional[Path] = None,
     simulated_states: Optional[np.ndarray] = None,
     simulated_tracks: Optional[list] = None,
+    front_camera=None,                 # navsim Camera (image + intrinsics + sensor2lidar_*)
+    lidar2ego_R: Optional[np.ndarray] = None,
+    lidar2ego_t: Optional[np.ndarray] = None,
+    ground_z: float = -1.8,
+    front_camera_label: str = "front cam (stage1, real)",
+    stage2_cam_data: Optional[List[Dict]] = None,  # [{offset, camera, lidar2ego_R/t, trajectory, weight}]
 ) -> None:
     ego_state = metric_cache.ego_state
     ego_pose = ego_state.rear_axle
 
-    # ── figure layout: BEV (left 60%) + metrics panel (right 40%) ──────────
-    fig = plt.figure(figsize=(22, 10))
-    ax = fig.add_axes([0.01, 0.04, 0.56, 0.92])  # BEV
-    ax_m = fig.add_axes([0.59, 0.04, 0.40, 0.92])  # metrics
+    # ── figure layout: BEV (left) + front-cam projection (middle) + metrics (right) ──
+    _has_cam = (
+        front_camera is not None
+        and getattr(front_camera, "image", None) is not None
+        and getattr(front_camera, "intrinsics", None) is not None
+        and getattr(front_camera, "sensor2lidar_rotation", None) is not None
+    )
+    _s2cams = [d for d in (stage2_cam_data or [])
+               if d.get("camera") is not None and getattr(d["camera"], "image", None) is not None][:3]
+    _human_xy = (metric_cache.human_trajectory.poses[:, :2]
+                 if metric_cache.human_trajectory is not None and len(metric_cache.human_trajectory.poses) > 0 else None)
+    _pred_xy = (pred_trajectory.poses[:, :2]
+                if pred_trajectory is not None and pred_trajectory.poses is not None and len(pred_trajectory.poses) > 0 else None)
+
+    if _has_cam and _s2cams:
+        # BEV (left) + 2x2 camera grid (stage1 + up to 3 stage2 novel-views) + metrics (right)
+        fig = plt.figure(figsize=(32, 11))
+        ax = fig.add_axes([0.005, 0.04, 0.275, 0.92])     # BEV
+        ax_m = fig.add_axes([0.755, 0.04, 0.24, 0.92])    # metrics
+        grid = [[0.31, 0.52, 0.205, 0.44], [0.525, 0.52, 0.205, 0.44],
+                [0.31, 0.04, 0.205, 0.44], [0.525, 0.04, 0.205, 0.44]]
+        cam_panels = [(front_camera, lidar2ego_R, lidar2ego_t,
+                       [(_human_xy, "#2ca02c", "Human"), (_pred_xy, "#d62728", "Agent S1")],
+                       front_camera_label)]
+        for d in _s2cams:
+            tj = d.get("trajectory")
+            s2xy = (tj.poses[:, :2] if tj is not None and tj.poses is not None and len(tj.poses) > 0 else None)
+            lbl = f"stage2 {d.get('offset', '')}" + (f"  w={d['weight']:.2f}" if d.get("weight") is not None else "")
+            cam_panels.append((d["camera"], d.get("lidar2ego_R"), d.get("lidar2ego_t"),
+                               [(s2xy, "#d62728", "Agent S2")], lbl))
+        for (cam_i, R_i, t_i, trajs_i, title_i), box in zip(cam_panels, grid):
+            axc = fig.add_axes(box)
+            try:
+                _draw_cam_panel(axc, cam_i, R_i, t_i, trajs_i, ground_z, title_i, fs=8)
+            except Exception as exc:
+                logger.warning(f"Camera panel failed ({title_i}): {exc}")
+                axc.axis("off")
+    elif _has_cam:
+        fig = plt.figure(figsize=(30, 10))
+        ax = fig.add_axes([0.005, 0.04, 0.37, 0.92])     # BEV
+        ax_cam = fig.add_axes([0.40, 0.28, 0.31, 0.55])  # front-cam projection
+        ax_m = fig.add_axes([0.72, 0.04, 0.275, 0.92])   # metrics
+        try:
+            _draw_cam_panel(
+                ax_cam, front_camera, lidar2ego_R, lidar2ego_t,
+                [(_human_xy, "#2ca02c", "Human"), (_pred_xy, "#d62728", "Agent")],
+                ground_z, front_camera_label,
+            )
+        except Exception as exc:
+            logger.warning(f"Camera projection panel failed: {exc}")
+            ax_cam.axis("off")
+    else:
+        fig = plt.figure(figsize=(22, 10))
+        ax = fig.add_axes([0.01, 0.04, 0.56, 0.92])  # BEV
+        ax_m = fig.add_axes([0.59, 0.04, 0.40, 0.92])  # metrics
 
     # ── BEV ────────────────────────────────────────────────────────────────
     ax.set_facecolor(BEV_PLOT_CONFIG["background_color"])
